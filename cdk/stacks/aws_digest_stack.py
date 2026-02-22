@@ -6,9 +6,10 @@ cdk deploy 1回で以下をすべて作成します:
   2. CodeBuild Project        — ARM64 イメージをビルドして ECR に push
   3. Lambda (カスタムリソース) — CodeBuild 完了まで待機
   4. AgentCore Runtime        — Strands Agent のホスティング環境
-  5. Secrets Manager          — Slack Bot Token 保管
-  6. Lambda (handler)         — AgentCore 呼び出し + Slack 通知
-  7. EventBridge × 2          — 朝9時（morning）・昼12時（noon）スケジュール
+  5. Lambda (handler)         — AgentCore 呼び出し + Slack 通知
+  6. EventBridge × 2          — 朝9時（morning）・昼12時（noon）スケジュール
+
+Slack 認証情報は CfnParameter で受け取り Lambda 環境変数に設定（Secrets Manager 不使用）
 """
 
 import os

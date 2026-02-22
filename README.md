@@ -25,7 +25,6 @@ EventBridge (昼12時 JST) ─> Lambda {"mode": "noon"}
 | **Lambda** | AgentCore を呼び出し、結果を受け取りSlackへ投稿 |
 | **EventBridge** | 朝9時（What's New速報）・昼12時（技術ブログまとめ）の2スケジュール |
 | **CDK** | 全インフラ（AgentCore・Lambda・EventBridge等）をコード管理 |
-| **Secrets Manager** | Slack Bot Token の安全な管理 |
 
 ---
 
@@ -44,9 +43,8 @@ rss-tool/
 ├── cdk/                          # CDK インフラ定義
 │   ├── app.py
 │   ├── stacks/
-│   │   └── aws_digest_stack.py   # AgentCore・Lambda・EventBridge・Secrets Manager
+│   │   └── aws_digest_stack.py   # AgentCore・Lambda・EventBridge
 │   └── requirements.txt
-└── .env.example
 ```
 
 ---
@@ -127,37 +125,24 @@ rss-tool/
 - Docker / Finch / Podman（ローカルテスト用、任意）
 - Slack Bot Token（`chat:write` 権限）
 
-### 1. 環境変数の設定
-
-```bash
-cp .env.example .env
-# .env を編集して各値を設定
-```
-
-```env
-AWS_REGION=ap-northeast-1
-SLACK_BOT_TOKEN=xoxb-xxxxxxxxxxxx
-SLACK_CHANNEL_ID=C0XXXXXXXXX
-BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20251001-v1:0
-```
-
-### 2. Strands Agent のローカルテスト（任意）
+### 1. Strands Agent のローカルテスト（任意）
 
 ```bash
 cd agent
-pip install -r requirements.txt
+uv venv && uv pip install -r requirements.txt
 
-python agent.py
+# RSS 取得のみ確認（AWS 不要）
+uv run python test_local.py --hours 200
 
-# 別ターミナルで動作確認
-curl -X POST http://localhost:8080/invocations \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "fetch_and_notify"}'
+# Agent 全体確認（AWS 認証必要）
+uv run python test_local.py --hours 200 --full
+uv run python test_local.py --hours 200 --full --mode noon
 ```
 
-### 3. CDK でインフラ一括デプロイ
+### 2. CDK でインフラ一括デプロイ
 
-AgentCore・Lambda・EventBridge・Secrets Manager をまとめてデプロイします。
+AgentCore・Lambda・EventBridge をまとめてデプロイします。
+Slack の認証情報は `--parameters` でデプロイ時に渡します（コードや設定ファイルには書きません）。
 
 ```bash
 cd cdk
@@ -166,11 +151,29 @@ pip install -r requirements.txt
 # CDK ブートストラップ（初回のみ）
 cdk bootstrap
 
-# デプロイ
-cdk deploy
+# デプロイ（Slack 認証情報をパラメータで渡す）
+cdk deploy \
+  --parameters SlackBotToken=xoxb-xxxxxxxxxxxx \
+  --parameters SlackChannelId=C0XXXXXXXXX
 ```
 
 デプロイ後、CDK の出力から AgentCore Runtime ARN が確認できます。Lambda の環境変数には CDK が自動で設定します。
+
+### 3. Lambda を手動実行してテスト
+
+```bash
+# 朝モードのテスト
+aws lambda invoke \
+  --function-name aws-digest-handler \
+  --payload '{"mode": "morning"}' \
+  response.json && cat response.json
+
+# 昼モードのテスト
+aws lambda invoke \
+  --function-name aws-digest-handler \
+  --payload '{"mode": "noon"}' \
+  response.json && cat response.json
+```
 
 ---
 
@@ -207,7 +210,7 @@ Amazon Bedrock に新モデルが追加
   "Effect": "Allow",
   "Action": [
     "bedrock:InvokeModel",
-    "secretsmanager:GetSecretValue"
+    "bedrock:InvokeModelWithResponseStream"
   ],
   "Resource": "*"
 }
