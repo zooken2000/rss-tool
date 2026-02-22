@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# CDK
+cdk/cdk.out/
+cdk/.venv/
+
+# 環境変数・認証情報
+.env
+.env.*
+*.pem
+
+# Lambda ビルド成果物
+*.zip
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
