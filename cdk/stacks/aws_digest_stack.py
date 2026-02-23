@@ -253,6 +253,77 @@ class AwsDigestStack(Stack):
         )
 
         # ─────────────────────────────────────────
+        # 6. Lambda — 週次レポート（CloudWatch 収集 → LLM → Slack）
+        # ─────────────────────────────────────────
+        weekly_report_model_id = CfnParameter(self, "ReportModelId",
+            type="String",
+            default="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            description="週次レポート生成に使用する Bedrock モデル ID",
+        )
+
+        weekly_role = iam.Role(
+            self,
+            "WeeklyReportLambdaRole",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole"
+                )
+            ],
+            inline_policies={
+                "WeeklyReportPolicy": iam.PolicyDocument(
+                    statements=[
+                        # Lambda メトリクス取得（AWS/Lambda 名前空間）
+                        iam.PolicyStatement(
+                            actions=["cloudwatch:GetMetricStatistics"],
+                            resources=["*"],
+                        ),
+                        # Logs Insights クエリ（ハンドラーログ + 将来の評価結果ログ）
+                        iam.PolicyStatement(
+                            actions=["logs:StartQuery"],
+                            resources=[
+                                f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/lambda/{handler_fn.function_name}",
+                                f"arn:aws:logs:{self.region}:{self.account}:log-group:/aws/bedrock-agentcore/evaluations/results/*",
+                            ],
+                        ),
+                        iam.PolicyStatement(
+                            actions=["logs:GetQueryResults", "logs:StopQuery"],
+                            resources=["*"],
+                        ),
+                        # Bedrock InvokeModel（レポート生成用 Claude）
+                        iam.PolicyStatement(
+                            actions=["bedrock:InvokeModel"],
+                            resources=[
+                                f"arn:aws:bedrock:{self.region}::foundation-model/*",
+                            ],
+                        ),
+                    ]
+                )
+            },
+        )
+
+        weekly_fn = lambda_.Function(
+            self,
+            "WeeklyReportFunction",
+            function_name="aws-digest-weekly-report",
+            runtime=lambda_.Runtime.PYTHON_3_11,
+            handler="weekly_report.handler",
+            timeout=Duration.minutes(5),
+            memory_size=256,
+            role=weekly_role,
+            code=lambda_.Code.from_asset(
+                os.path.join(os.path.dirname(__file__), "../../lambda"),
+            ),
+            environment={
+                "SLACK_BOT_TOKEN":        slack_bot_token.value_as_string,
+                "SLACK_CHANNEL_ID":       slack_channel_id.value_as_string,
+                "HANDLER_FUNCTION_NAME":  handler_fn.function_name,
+                "EVAL_LOG_GROUP":         "",   # Online Evaluation 設定後に手動で更新
+                "REPORT_MODEL_ID":        weekly_report_model_id.value_as_string,
+            },
+        )
+
+        # ─────────────────────────────────────────
         # 7. EventBridge — 朝9時・昼12時（JST）
         # ─────────────────────────────────────────
 
@@ -286,6 +357,17 @@ class AwsDigestStack(Stack):
             ],
         )
 
+        # 週次レポート — 月曜 10:00 JST = 月曜 01:00 UTC
+        # 朝の digest（00:00 UTC）完了後に実行するため 1時間ずらす
+        events.Rule(
+            self,
+            "WeeklyReportRule",
+            rule_name="aws-digest-weekly-report",
+            description="AWS Daily Digest — 週次レポート（月曜 10:00 JST）",
+            schedule=events.Schedule.cron(hour="1", minute="0", week_day="MON"),
+            targets=[targets.LambdaFunction(weekly_fn)],
+        )
+
         # ─────────────────────────────────────────
         # Outputs
         # ─────────────────────────────────────────
@@ -295,3 +377,16 @@ class AwsDigestStack(Stack):
         CfnOutput(self, "HandlerFunctionName",
                   description="Lambda 関数名",
                   value=handler_fn.function_name)
+        CfnOutput(self, "WeeklyReportFunctionName",
+                  description="週次レポート Lambda 関数名",
+                  value=weekly_fn.function_name)
+        CfnOutput(self, "OnlineEvalSetupCommand",
+                  description="Online Evaluation 設定コマンド（デプロイ後に実行）",
+                  value=(
+                      f"agentcore eval online create"
+                      f" --name aws_digest_eval"
+                      f" --sampling-rate 100"
+                      f" --evaluator Builtin.GoalSuccessRate"
+                      f" --evaluator Builtin.Helpfulness"
+                      f" --evaluator Builtin.Correctness"
+                  ))
